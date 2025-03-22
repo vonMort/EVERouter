@@ -2,62 +2,38 @@ import json
 import heapq
 import logging
 
-ONLY_HIGHSEC = True  # Sicherheitsfilter (True = nur 0.5+ Systeme)
-
-# Logging-Konfiguration
-logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
-logger = logging.getLogger("routing")
+ONLY_HIGHSEC = True
 
 def build_graph(universe_data):
     graph = {}
     security = {}
     name_to_id = {}
     id_to_name = {}
-    stargate_to_system = {}  # stargate_id -> system_id
-    stargate_links = {}      # stargate_id -> destination_stargate_id
 
-    logger.info("🔧 Baue Graph aus Universe-Daten...")
+    print("🔧 Baue Graph auf Basis von 'connections'...")
 
-    # 1. Systeme und Stargates sammeln
     for region in universe_data.values():
         for constellation in region["constellations"].values():
             for sys_name, sys_data in constellation["systems"].items():
-                sys_id = sys_data["solarSystemID"]
-                name_lc = sys_name.lower()
+                sys_id = sys_data.get("solarSystemID")
+                sys_name_lc = sys_name.lower()
 
-                name_to_id[name_lc] = sys_id
+                name_to_id[sys_name_lc] = sys_id
                 id_to_name[sys_id] = sys_name
                 security[sys_id] = sys_data.get("security", 0.0)
+
                 graph.setdefault(sys_id, set())
 
-                stargates = sys_data.get("stargates", {})
-                if isinstance(stargates, dict):
-                    for gate_id, gate_data in stargates.items():
-                        stargate_to_system[int(gate_id)] = sys_id
-                        destination_id = gate_data.get("destination")
-                        if destination_id:
-                            stargate_links[int(gate_id)] = int(destination_id)
-                elif isinstance(stargates, list):
-                    logger.warning(f"⚠️ Stargates für System {sys_name} liegen als Liste vor, erwartet war ein Dict.")
+                for neighbor_id in sys_data.get("connections", []):
+                    graph[sys_id].add(neighbor_id)
 
-    logger.info(f"✅ {len(name_to_id)} Systeme erfasst.")
-    logger.info("🔗 Baue Stargate-Verbindungen auf Systemebene...")
-
-    count_links = 0
-    for from_gate, to_gate in stargate_links.items():
-        from_system = stargate_to_system.get(from_gate)
-        to_system = stargate_to_system.get(to_gate)
-        if from_system and to_system:
-            graph[from_system].add(to_system)
-            graph[to_system].add(from_system)
-            count_links += 1
-
-    logger.info(f"🔗 {count_links} System-Verbindungen gesetzt über Stargates.")
+    print(f"✅ {len(name_to_id)} Systeme verarbeitet.")
     return graph, security, name_to_id, id_to_name
 
 
+
 def find_shortest_path(universe_data, start_name, end_name, only_highsec=True):
-    logger.info(f"🚀 Suche Route von '{start_name}' nach '{end_name}' (nur Highsec: {only_highsec})")
+    print(f"🚀 Suche Route von '{start_name}' nach '{end_name}' (nur Highsec: {only_highsec})")
 
     graph, security, name_to_id, id_to_name = build_graph(universe_data)
 
@@ -65,10 +41,10 @@ def find_shortest_path(universe_data, start_name, end_name, only_highsec=True):
     end_id = name_to_id.get(end_name.lower())
 
     if start_id is None:
-        logger.error(f"❌ Startsystem '{start_name}' nicht gefunden.")
+        print(f"❌ Startsystem '{start_name}' nicht gefunden.")
         return []
     if end_id is None:
-        logger.error(f"❌ Zielsystem '{end_name}' nicht gefunden.")
+        print(f"❌ Zielsystem '{end_name}' nicht gefunden.")
         return []
 
     visited = set()
@@ -84,7 +60,7 @@ def find_shortest_path(universe_data, start_name, end_name, only_highsec=True):
         path = path + [current]
 
         if current == end_id:
-            logger.info(f"✅ Route gefunden mit {len(path)-1} Sprüngen.")
+            print(f"✅ Route gefunden mit {len(path)-1} Sprüngen.")
             return [id_to_name.get(pid, str(pid)) for pid in path]
 
         for neighbor in graph.get(current, []):
@@ -92,26 +68,19 @@ def find_shortest_path(universe_data, start_name, end_name, only_highsec=True):
                 continue
             sec = security.get(neighbor, 0.0)
             if only_highsec and sec < 0.5:
-                logger.debug(f"⛔ System {id_to_name.get(neighbor, neighbor)} hat Sicherheitsstatus {sec:.1f} < 0.5 – übersprungen")
+                print(f"⛔ System {id_to_name.get(neighbor, neighbor)} hat Sicherheitsstatus {sec:.1f} < 0.5 – übersprungen")
                 continue
             heapq.heappush(heap, (cost + 1, neighbor, path))
 
-    logger.warning("⚠️ Keine Route gefunden.")
+    print("⚠️ Keine Route gefunden.")
     return []
 
-
-# Beispielnutzung (lokal):
-if __name__ == "__main__":
+def get_route_between(universe_path, start_system, end_system, only_highsec=True):
     try:
-        with open("../cache/universe_sde_cache.json", "r", encoding="utf-8") as f:
+        with open(universe_path, "r", encoding="utf-8") as f:
             universe = json.load(f)
-
-        route = find_shortest_path(universe, "Nakri", "Amarr", only_highsec=True)
-        if route:
-            print("Gefundene Route:", " → ".join(route))
-        else:
-            print("Keine Route gefunden.")
-    except FileNotFoundError as e:
-        logger.error(f"Datei nicht gefunden: {e}")
     except Exception as e:
-        logger.exception(f"Unerwarteter Fehler: {e}")
+        print(f"❌ Fehler beim Laden der Universe-Datei: {e}")
+        return []
+
+    return find_shortest_path(universe, start_system, end_system, only_highsec=only_highsec)

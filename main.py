@@ -1,5 +1,6 @@
 import json
 from utils.generate_market_cache import cache_all_regions, get_market_orders
+from utils.routing import get_route_between
 
 CACHE_DIR = "cache"
 
@@ -49,6 +50,98 @@ def build_market_data(source_orders, dest_orders, source_system_id, dest_system_
 
     return market
 
+
+def analyze_route_trade_opportunities(route, universe_data, item_data, station_data, cargo_capacity, budget):
+    from utils.generate_market_cache import get_market_orders
+    opportunities = []
+    region_cache = {}
+
+    def get_orders_for_system(system_name):
+        region_id, system_id = get_region_id_by_system_name(universe_data, system_name)
+        if not region_id or not system_id:
+            return [], system_id
+        if region_id not in region_cache:
+            region_cache[region_id] = get_market_orders(region_id, order_type="all")
+        return region_cache[region_id], system_id
+
+    for i in range(len(route) - 1):
+        source_sys = route[i]
+        source_orders_raw, source_sys_id = get_orders_for_system(source_sys)
+        for j in range(i + 1, len(route)):
+            dest_sys = route[j]
+            dest_orders_raw, dest_sys_id = get_orders_for_system(dest_sys)
+
+            market = build_market_data(source_orders_raw, dest_orders_raw, source_sys_id, dest_sys_id, station_data)
+
+            for item_id, data in market.items():
+                if item_id not in item_data["by_id"]:
+                    continue
+
+                sell_orders = sorted(data.get("sell_orders", []), key=lambda x: x["price"])
+                buy_orders = sorted(data.get("buy_orders", []), key=lambda x: -x["price"])
+
+                if not sell_orders or not buy_orders:
+                    continue
+
+                volume_per_unit = item_data["by_id"][item_id]["volume"]
+                available_budget = budget
+                available_volume = cargo_capacity
+
+                total_profit = 0
+                total_units = 0
+
+                si = 0
+                bi = 0
+
+                while si < len(sell_orders) and bi < len(buy_orders):
+                    sell = sell_orders[si]
+                    buy = buy_orders[bi]
+
+                    if sell["price"] >= buy["price"]:
+                        break
+
+                    unit_profit = buy["price"] - sell["price"]
+                    max_units = min(
+                        sell["volume_remain"],
+                        buy["volume_remain"],
+                        available_budget // sell["price"],
+                        available_volume // volume_per_unit
+                    )
+
+                    if max_units <= 0:
+                        break
+
+                    profit = max_units * unit_profit
+                    total_units += max_units
+                    total_profit += profit
+                    available_budget -= max_units * sell["price"]
+                    available_volume -= max_units * volume_per_unit
+
+                    sell_orders[si]["volume_remain"] -= max_units
+                    buy_orders[bi]["volume_remain"] -= max_units
+
+                    if sell_orders[si]["volume_remain"] <= 0:
+                        si += 1
+                    if buy_orders[bi]["volume_remain"] <= 0:
+                        bi += 1
+
+                if total_units == 0:
+                    continue
+
+                opportunities.append({
+                    "from": source_sys,
+                    "to": dest_sys,
+                    "item": item_data["by_id"][item_id]["name"],
+                    "units": total_units,
+                    "volume": volume_per_unit,
+                    "total_profit": total_profit,
+                    "unit_profit": total_profit / total_units,
+                    "profit_per_m3": total_profit / (volume_per_unit * total_units)
+                })
+
+    return sorted(opportunities, key=lambda x: x["total_profit"], reverse=True)
+
+
 def main():
     print("Willkommen zum EVE Handelsrouten-Planer!\n")
 
@@ -78,8 +171,20 @@ def main():
     print(f"- Frachtvolumen:  {format_number(cargo_capacity)} m³")
     print(f"- Budget:         {format_number(budget)} ISK")
 
-    source_region, source_system_id = get_region_id_by_system_name(universe_data, source_system)
-    dest_region, dest_system_id = get_region_id_by_system_name(universe_data, dest_system)
+    print("\n🧭 Berechne beste Route zwischen den Systemen...")
+    route = get_route_between("cache/universe_sde_cache.json", source_system, dest_system, only_highsec=True)
+
+    if not route:
+        print("❌ Keine gültige Route gefunden.")
+        return
+
+    print(f"📌 Gefundene Route ({len(route) - 1} Sprünge): " + " → ".join(route))
+
+    start_system = route[0]
+    end_system = route[-1]
+
+    source_region, source_system_id = get_region_id_by_system_name(universe_data, start_system)
+    dest_region, dest_system_id = get_region_id_by_system_name(universe_data, end_system)
 
     if source_region is None or dest_region is None:
         print("❌ Konnte Region zu einem der Systeme nicht ermitteln.")
@@ -164,6 +269,16 @@ def main():
     print("\n💡 Top 10 profitabelste Items (nach Gesamtgewinn, unter Berücksichtigung von Volumen, Angebot und Budget):")
     for item in profitable_sorted[:10]:
         print(f"{item['name']:35} | Menge: {int(item['units']):5d} | Gewinn: {format_number(item['total_profit'])} ISK | Gewinn/Einheit: {format_number(item['unit_profit'])} ISK | Volumen: {item['volume']} m³")
+
+    print("\n🔍 Berechne profitabelste Multi-Hop-Handelsoptionen entlang der Route...")
+    opportunities = analyze_route_trade_opportunities(route, universe_data, item_data, station_data, cargo_capacity,
+                                                      budget)
+
+    print("\n💼 Top 10 Handelsoptionen entlang der Route:")
+    for op in opportunities[:10]:
+        print(
+            f"{op['item']:35} | {op['from']:10} → {op['to']:10} | Gewinn: {format_number(op['total_profit'])} ISK | Menge: {op['units']} | Volumen: {op['volume']} m³")
+
 
 if __name__ == "__main__":
     main()

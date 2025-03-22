@@ -6,7 +6,7 @@ import requests
 ESI_BASE = "https://esi.evetech.net/latest"
 CACHE_DIR = "cache"
 EMPIRE_REGIONS = {
-    "aridia", "devoid", "domain", "genesis", "kador", "kor-azor", "tash-murkon", "thebleaklands",
+    "aridia", "derelik", "devoid", "domain", "genesis", "kador", "khanid", "kor-azor", "tash-murkon", "thebleaklands",
     "lonetrek", "thecitadel", "theforge", "essence", "everyshore", "placid", "sinqlaison", "solitude",
     "vergevendor", "metropolis", "heimatar", "moldenheath"
 }
@@ -23,9 +23,14 @@ def get_all_region_ids():
 
 def get_market_orders(region_id, order_type="all"):
     cache_key = f"{CACHE_DIR}/region_{region_id}_{order_type}.json"
+    age_minutes = int((time.time() - os.path.getmtime(cache_key)) / 60)
     if os.path.exists(cache_key) and time.time() - os.path.getmtime(cache_key) < CACHE_DURATION:
+        print(f"✅ Marktdaten sind {age_minutes} Minuten alt. Lade lokalen Cache: {cache_key}")
         with open(cache_key, "r", encoding="utf-8") as f:
             return json.load(f)
+    else:
+        print(f"⚠️ Marktdaten älter als 30 Minuten ({age_minutes} min). Lade neue Daten von ESI...")
+
 
     orders = []
     page = 1

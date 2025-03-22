@@ -84,15 +84,24 @@ def build_sde_universe_cache():
     paths = get_solarsystem_yaml_paths(SDE_BASE_PATH)
     print(f"📁 {len(paths)} solarsystem.yaml-Dateien gefunden")
 
-    system_refs = {}  # region_key -> const_key -> sys_key → ref für spätere Verbindung
+    region_cache = {}
+    constellation_cache = {}
 
     for region, constellation, system, yaml_path in tqdm(paths, desc="📦 Verarbeite Systeme"):
         region_key = region.lower()
         constellation_key = constellation.lower()
         system_key = system.lower()
 
-        region_yaml = parse_yaml_file(os.path.join(SDE_BASE_PATH, region, "region.yaml"))
-        constellation_yaml = parse_yaml_file(os.path.join(SDE_BASE_PATH, region, constellation, "constellation.yaml"))
+        region_yaml_path = os.path.join(SDE_BASE_PATH, region, "region.yaml")
+        const_yaml_path = os.path.join(SDE_BASE_PATH, region, constellation, "constellation.yaml")
+
+        if region_key not in region_cache:
+            region_cache[region_key] = parse_yaml_file(region_yaml_path)
+        if constellation_key not in constellation_cache:
+            constellation_cache[constellation_key] = parse_yaml_file(const_yaml_path)
+
+        region_yaml = region_cache[region_key]
+        constellation_yaml = constellation_cache[constellation_key]
 
         if region_key not in universe:
             universe[region_key] = {
@@ -115,23 +124,23 @@ def build_sde_universe_cache():
 
         universe[region_key]["constellations"][constellation_key]["systems"][system_key] = parsed_system
 
-    # Jetzt Verbindungen auflösen
     print("🔗 Setze Verbindungen zwischen Systemen...")
     added_links = 0
     for from_gate_id, dest in stargate_links.items():
         from_sys = stargate_to_system.get(from_gate_id)
-        to_gate_id = dest.get("stargateID")
+        to_gate_id = dest if isinstance(dest, int) else dest.get("stargateID")
         to_sys = stargate_to_system.get(to_gate_id)
 
         if from_sys and to_sys and from_sys != to_sys:
-            # Füge beide Richtungen hinzu
             for region in universe.values():
                 for constellation in region["constellations"].values():
                     for system in constellation["systems"].values():
                         if system["solarSystemID"] == from_sys:
-                            system["connections"].append(to_sys)
+                            if to_sys not in system["connections"]:
+                                system["connections"].append(to_sys)
                         elif system["solarSystemID"] == to_sys:
-                            system["connections"].append(from_sys)
+                            if from_sys not in system["connections"]:
+                                system["connections"].append(from_sys)
             added_links += 1
 
     print(f"✅ {added_links} Verbindungen zwischen Systemen hinzugefügt.")
