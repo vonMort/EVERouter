@@ -1,14 +1,7 @@
 import json
-import requests
-import os
-import time
+from utils.generate_market_cache import cache_all_regions, get_market_orders
 
-ESI_BASE = "https://esi.evetech.net/latest"
 CACHE_DIR = "cache"
-CACHE_DURATION = 60 * 30  # 30 Minuten
-
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
 
 def get_region_id_by_system_name(universe_data, system_name):
     system_name = system_name.strip().lower()
@@ -28,34 +21,6 @@ def load_cache(filename):
 
 def format_number(number):
     return f"{number:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
-
-def get_market_orders(region_id, order_type="all"):
-    cache_key = f"{CACHE_DIR}/region_{region_id}_{order_type}.json"
-    if os.path.exists(cache_key):
-        if time.time() - os.path.getmtime(cache_key) < CACHE_DURATION:
-            with open(cache_key, "r", encoding="utf-8") as f:
-                return json.load(f)
-
-    orders = []
-    page = 1
-    while True:
-        url = f"{ESI_BASE}/markets/{region_id}/orders/"
-        params = {"datasource": "tranquility", "page": page}
-        if order_type != "all":
-            params["order_type"] = order_type
-        response = requests.get(url, params=params)
-        if response.status_code != 200:
-            break
-        page_data = response.json()
-        if not page_data:
-            break
-        orders.extend(page_data)
-        page += 1
-
-    with open(cache_key, "w", encoding="utf-8") as f:
-        json.dump(orders, f)
-
-    return orders
 
 def build_market_data(source_orders, dest_orders, source_system_id, dest_system_id, station_data):
     market = {}
@@ -87,12 +52,15 @@ def build_market_data(source_orders, dest_orders, source_system_id, dest_system_
 def main():
     print("Willkommen zum EVE Handelsrouten-Planer!\n")
 
+    print("🔄 Starte initiales Markt-Caching aller Regionen...")
+    cache_all_regions(order_type="all")
+
     universe_data = load_cache("cache/universe_sde_cache.json")
     item_data = load_cache("cache/item_cache.json")
     station_data = load_cache("cache/station_cache.json")
 
-    source_system = input("🛰️  In welchem System befindest du dich aktuell? ").strip()
-    dest_system = input("🎯 Welches System ist dein Ziel? ").strip()
+    source_system = input("🛨️  In welchem System befindest du dich aktuell? ").strip()
+    dest_system = input("🌟 Welches System ist dein Ziel? ").strip()
 
     try:
         cargo_capacity = float(input("📦 Wie viel m³ Frachtvolumen steht dir zur Verfügung? (Standard: 10000) ") or 10000)
@@ -117,9 +85,9 @@ def main():
         print("❌ Konnte Region zu einem der Systeme nicht ermitteln.")
         return
 
-    print("\n🔄 Lade Marktorders vom ESI...")
-    source_orders = get_market_orders(source_region, order_type="sell")
-    dest_orders = get_market_orders(dest_region, order_type="buy")
+    print("\n🔄 Lade Marktorders aus dem Cache...")
+    source_orders = get_market_orders(source_region, order_type="all")
+    dest_orders = get_market_orders(dest_region, order_type="all")
     print(f"✅ {len(source_orders)} Verkaufsorders im Quellgebiet, {len(dest_orders)} Kauforders im Zielgebiet geladen.")
 
     market = build_market_data(source_orders, dest_orders, source_system_id, dest_system_id, station_data)

@@ -3,8 +3,10 @@ import yaml
 import json
 from tqdm import tqdm
 
-SDE_BASE_PATH = "../eve_metadata/sde/universe/eve"  # <<< ANPASSBAR: Pfad zum SDE-Verzeichnis
+SDE_BASE_PATH = "../eve_metadata/sde/universe/eve"
 
+stargate_to_system = {}
+stargate_links = {}
 
 def get_solarsystem_yaml_paths(base_path):
     system_paths = []
@@ -33,8 +35,17 @@ def parse_yaml_file(file_path):
     return {}
 
 
-def parse_solarsystem_yaml(yaml_path):
+def parse_solarsystem_yaml(yaml_path, current_system_id):
     data = parse_yaml_file(yaml_path)
+
+    stargates_raw = data.get("stargates", {})
+
+    if isinstance(stargates_raw, dict):
+        for gate_id_str, gate_data in stargates_raw.items():
+            gate_id = int(gate_id_str)
+            stargate_to_system[gate_id] = current_system_id
+            if "destination" in gate_data:
+                stargate_links[gate_id] = gate_data["destination"]
 
     result = {
         "solarSystemID": data.get("solarSystemID"),
@@ -43,9 +54,10 @@ def parse_solarsystem_yaml(yaml_path):
         "securityClass": data.get("securityClass"),
         "sunTypeID": data.get("sunTypeID"),
         "planets": list(data.get("planets", {}).keys()),
-        "stargates": list(data.get("stargates", {}).keys()),
+        "stargates": list(stargates_raw.keys()),
         "stations": [],
         "planet_details": {},
+        "connections": []  # wird später gefüllt
     }
 
     for planet_id, planet in data.get("planets", {}).items():
@@ -72,6 +84,8 @@ def build_sde_universe_cache():
     paths = get_solarsystem_yaml_paths(SDE_BASE_PATH)
     print(f"📁 {len(paths)} solarsystem.yaml-Dateien gefunden")
 
+    system_refs = {}  # region_key -> const_key -> sys_key → ref für spätere Verbindung
+
     for region, constellation, system, yaml_path in tqdm(paths, desc="📦 Verarbeite Systeme"):
         region_key = region.lower()
         constellation_key = constellation.lower()
@@ -95,9 +109,32 @@ def build_sde_universe_cache():
                 "systems": {}
             }
 
-        system_data = parse_solarsystem_yaml(yaml_path)
-        universe[region_key]["constellations"][constellation_key]["systems"][system_key] = system_data
+        system_data = parse_yaml_file(yaml_path)
+        sys_id = system_data.get("solarSystemID")
+        parsed_system = parse_solarsystem_yaml(yaml_path, sys_id)
 
+        universe[region_key]["constellations"][constellation_key]["systems"][system_key] = parsed_system
+
+    # Jetzt Verbindungen auflösen
+    print("🔗 Setze Verbindungen zwischen Systemen...")
+    added_links = 0
+    for from_gate_id, dest in stargate_links.items():
+        from_sys = stargate_to_system.get(from_gate_id)
+        to_gate_id = dest.get("stargateID")
+        to_sys = stargate_to_system.get(to_gate_id)
+
+        if from_sys and to_sys and from_sys != to_sys:
+            # Füge beide Richtungen hinzu
+            for region in universe.values():
+                for constellation in region["constellations"].values():
+                    for system in constellation["systems"].values():
+                        if system["solarSystemID"] == from_sys:
+                            system["connections"].append(to_sys)
+                        elif system["solarSystemID"] == to_sys:
+                            system["connections"].append(from_sys)
+            added_links += 1
+
+    print(f"✅ {added_links} Verbindungen zwischen Systemen hinzugefügt.")
     print("✅ Verarbeitung abgeschlossen.")
     return universe
 
