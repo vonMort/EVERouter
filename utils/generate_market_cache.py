@@ -23,14 +23,9 @@ def get_all_region_ids():
 
 def get_market_orders(region_id, order_type="all"):
     cache_key = f"{CACHE_DIR}/region_{region_id}_{order_type}.json"
-    age_minutes = int((time.time() - os.path.getmtime(cache_key)) / 60)
     if os.path.exists(cache_key) and time.time() - os.path.getmtime(cache_key) < CACHE_DURATION:
-        print(f"✅ Marktdaten sind {age_minutes} Minuten alt. Lade lokalen Cache: {cache_key}")
         with open(cache_key, "r", encoding="utf-8") as f:
             return json.load(f)
-    else:
-        print(f"⚠️ Marktdaten älter als 30 Minuten ({age_minutes} min). Lade neue Daten von ESI...")
-
 
     orders = []
     page = 1
@@ -41,6 +36,7 @@ def get_market_orders(region_id, order_type="all"):
             params["order_type"] = order_type
         response = requests.get(url, params=params)
         if response.status_code != 200:
+            print(f"❌ Fehler beim Laden von Seite {page} für Region {region_id}: {response.status_code}")
             break
         page_data = response.json()
         if not page_data:
@@ -56,10 +52,25 @@ def get_market_orders(region_id, order_type="all"):
 
 def cache_all_regions(order_type="all"):
     region_ids = get_all_region_ids()
-    print(f"🌍 {len(region_ids)} Regionen werden verarbeitet...")
+    print(f"🌍 {len(region_ids)} Regionen werden geprüft...")
+
     for region_id in region_ids:
-        print(f"🔄 Caching Markt-Orders für Region {region_id} ({order_type})...")
-        try:
-            get_market_orders(region_id, order_type=order_type)
-        except Exception as e:
-            print(f"⚠️ Fehler bei Region {region_id}: {e}")
+        cache_key = f"{CACHE_DIR}/region_{region_id}_{order_type}.json"
+        needs_refresh = False
+
+        if not os.path.exists(cache_key):
+            print(f"📂 Region {region_id}: Kein Cache vorhanden – lade Daten neu.")
+            needs_refresh = True
+        else:
+            age_sec = time.time() - os.path.getmtime(cache_key)
+            if age_sec >= CACHE_DURATION:
+                print(f"⏳ Region {region_id}: Cache ist {int(age_sec / 60)} Minuten alt – wird neu geladen.")
+                needs_refresh = True
+            else:
+                print(f"✅ Region {region_id}: Cache ist aktuell ({int(age_sec / 60)} Minuten) – wird nicht aktualisiert.")
+
+        if needs_refresh:
+            try:
+                get_market_orders(region_id, order_type=order_type)
+            except Exception as e:
+                print(f"⚠️ Fehler beim Aktualisieren der Region {region_id}: {e}")
